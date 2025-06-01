@@ -1,0 +1,35 @@
+# 配置文件示例 - 复制为config.py并填写实际信息
+
+# 北邮统一身份认证用户名和密码
+BUPT_USERNAME = "你的学号"        # 例如: "2021211001"
+BUPT_PASSWORD = "你的密码"        # 你的统一身份认证密码
+
+# 宿舍信息配置（请使用room_finder.py查询具体房间信息）
+# 校区: 1=西土城, 2=沙河
+AREA_ID = 1                      # 校区ID：1=西土城，2=沙河
+# 公寓楼ID（需要查询具体楼ID）
+APARTMENT_ID = "你的公寓楼ID"     # 例如: "a3d3473047464fba9196e224659cc377"
+# 楼层
+FLOOR_ID = "你的楼层"            # 例如: "8"
+# 房间编号
+ROOM_NUMBER = "你的房间号"        # 例如: "5-801"
+
+# 邮件发送配置
+EMAIL_SMTP_SERVER = "smtp.qq.com"  # QQ邮箱SMTP服务器
+EMAIL_SMTP_PORT = 587               # SMTP端口
+EMAIL_USERNAME = "你的邮箱@qq.com"   # 发送邮件的QQ邮箱
+EMAIL_PASSWORD = "你的邮箱授权码"     # QQ邮箱授权码（不是QQ密码！）
+ALERT_EMAIL = "nemo.yzx@bupt.edu.com"  # 接收预警邮件的邮箱
+
+# 电费预警阈值（元）
+LOW_BALANCE_THRESHOLD = 10.0
+
+# Web服务配置
+WEB_HOST = "0.0.0.0"  # 监听所有网络接口
+WEB_PORT = 5100       # Web服务端口
+DEBUG_MODE = True     # 调试模式
+
+# 如果使用其他邮箱，请修改对应的SMTP设置：
+# Gmail: smtp.gmail.com, 587
+# 163邮箱: smtp.163.com, 25
+# 126邮箱: smtp.126.com, 25

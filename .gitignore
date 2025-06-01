@@ -1,0 +1,8 @@
+# 配置文件
+config.py
+*.pyc
+__pycache__/
+.env
+venv/
+*.log
+*.db
