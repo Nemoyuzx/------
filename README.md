@@ -244,7 +244,7 @@ pip install -r requirements.txt
 
 ## 📄 许可证
 
-MIT License
+GNU GENERAL PUBLIC LICENSE - Version 3, 29 June 2007
 
 ## ⚠️ 免责声明
 
