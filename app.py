@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 import time
 import json
 import re
+import shutil
+import importlib
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -464,18 +466,38 @@ class ElectricMonitor:
             WHERE strftime('%Y-%m', timestamp) = strftime('%Y-%m', 'now')
             AND usage_month IS NOT NULL
         ''')
-        month_usage = cursor.fetchone()[0]
+        month_usage = cursor.fetchone()[0]        # 余额趋势（最近24小时，按小时统计）
+        cursor.execute('''
+            SELECT strftime('%Y-%m-%d %H:00:00', timestamp) as hour, AVG(balance) as avg_balance
+            FROM electric_records 
+            WHERE timestamp > datetime('now', '-24 hours')
+            AND balance IS NOT NULL
+            GROUP BY strftime('%Y-%m-%d %H', timestamp)
+            ORDER BY hour
+        ''')
+        balance_trend_hourly = cursor.fetchall()
         
-        # 余额趋势（最近7天）
+        # 余额趋势（最近30天，按天统计）
         cursor.execute('''
             SELECT date(timestamp) as date, AVG(balance) as avg_balance
             FROM electric_records 
-            WHERE timestamp > datetime('now', '-7 days')
+            WHERE timestamp > datetime('now', '-30 days')
             AND balance IS NOT NULL
             GROUP BY date(timestamp)
             ORDER BY date
         ''')
-        balance_trend = cursor.fetchall()
+        balance_trend_daily = cursor.fetchall()
+        
+        # 余额趋势（最近12个月，按月统计）
+        cursor.execute('''
+            SELECT strftime('%Y-%m', timestamp) as month, AVG(balance) as avg_balance
+            FROM electric_records 
+            WHERE timestamp > datetime('now', '-12 months')
+            AND balance IS NOT NULL
+            GROUP BY strftime('%Y-%m', timestamp)
+            ORDER BY month
+        ''')
+        balance_trend_monthly = cursor.fetchall()
         
         conn.close()
         
@@ -483,7 +505,9 @@ class ElectricMonitor:
             'latest': latest,
             'today_usage': today_usage if today_usage is not None else 0.0,
             'month_usage': month_usage if month_usage is not None else 0.0,
-            'balance_trend': balance_trend
+            'balance_trend_hourly': balance_trend_hourly,
+            'balance_trend_daily': balance_trend_daily,
+            'balance_trend_monthly': balance_trend_monthly
         }
 
 # 创建监控实例
