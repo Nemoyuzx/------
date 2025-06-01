@@ -772,8 +772,7 @@ def scheduled_check():
     except Exception as e:
         logging.error(f"定时检查出错: {str(e)}")
 
-# 设置定时任务调度器
-scheduler = BackgroundScheduler()
+
 
 def setup_scheduler():
     """设置调度器，防止重复添加任务"""
@@ -795,23 +794,39 @@ def setup_scheduler():
     
     logging.info("定时任务已设置：每小时整点检查电费")
 
-# 注册退出时关闭调度器
-atexit.register(lambda: scheduler.shutdown())
+    # 注册退出时关闭调度器
+    atexit.register(lambda: scheduler.shutdown())
 
 if __name__ == '__main__':
     # 创建模板目录
     os.makedirs('templates', exist_ok=True)
     
+    # 设置定时任务调度器
+    global scheduler
+    scheduler = BackgroundScheduler()
     # 设置定时任务（只在主进程中设置）
     setup_scheduler()
     if not scheduler.running:
         scheduler.start()
         logging.info("定时任务调度器已启动")
     
-    print(f"电费监控系统启动中...")
-    print(f"Web界面地址: http://localhost:{config.WEB_PORT}")
-    print(f"请确保已在config.py中配置正确的用户名密码")
+    logging.info("电费监控系统启动中...")
+    logging.info(f"Web界面地址: http://localhost:{config.WEB_PORT}")
+    logging.info("请确保已在config.py中配置正确的用户名密码")
+
+    # 打印scheduler的所有任务
+    logging.info("当前调度器任务列表:")
+    for job in scheduler.get_jobs():
+        logging.info(f"任务ID: {job.id}, 下次执行时间: {job.next_run_time}, 触发器: {job.trigger}")
     
     # 在生产环境中关闭调试模式避免重复任务
     debug_mode = getattr(config, 'DEBUG_MODE', False)
-    app.run(host=config.WEB_HOST, port=config.WEB_PORT, debug=debug_mode)
+    
+    # 添加这个环境变量可以禁用Flask的自动重载器
+    os.environ['FLASK_DEBUG'] = '0' if not debug_mode else '1'
+    
+    # 如果在调试模式下，添加警告
+    if debug_mode:
+        logging.warning("警告：调试模式已启用，可能导致定时任务重复初始化。生产环境请在config.py中设置DEBUG_MODE=False")
+    
+    app.run(host=config.WEB_HOST, port=config.WEB_PORT, debug=debug_mode, use_reloader=debug_mode)
