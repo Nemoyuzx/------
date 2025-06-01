@@ -518,10 +518,9 @@ def api_check():
         data = monitor.get_electric_data()
         if data:
             monitor.save_data(data)
-            
-            # 检查是否需要发送预警
+              # 检查是否需要发送预警
             if float(data['balance']) < config.LOW_BALANCE_THRESHOLD:
-                monitor.send_alert(data)
+                monitor.send_alert(data['balance'])
             
             return jsonify({
                 'success': True, 
@@ -743,17 +742,34 @@ def scheduled_check():
             
             # 检查是否需要发送预警
             if float(data['balance']) < config.LOW_BALANCE_THRESHOLD:
-                monitor.send_alert(data)
+                monitor.send_alert(data['balance'])
         else:
             logging.error("定时检查失败 - 无法获取数据")
     except Exception as e:
         logging.error(f"定时检查出错: {str(e)}")
 
-# 设置定时任务
+# 设置定时任务调度器
 scheduler = BackgroundScheduler()
-# 每小时的整点检查
-scheduler.add_job(func=scheduled_check, trigger="cron", minute=0)
-scheduler.start()
+
+def setup_scheduler():
+    """设置调度器，防止重复添加任务"""
+    # 清除可能存在的旧任务
+    for job in scheduler.get_jobs():
+        if job.id == 'electric_check':
+            scheduler.remove_job('electric_check')
+    
+    # 添加新任务，设置ID和配置参数
+    scheduler.add_job(
+        func=scheduled_check,
+        trigger="cron",
+        minute=0,  # 每小时整点执行
+        id='electric_check',  # 设置唯一ID
+        max_instances=1,  # 最多同时运行1个实例
+        coalesce=True,  # 如果错过执行时间，只运行最新的一次
+        misfire_grace_time=300  # 允许5分钟的延迟执行
+    )
+    
+    logging.info("定时任务已设置：每小时整点检查电费")
 
 # 注册退出时关闭调度器
 atexit.register(lambda: scheduler.shutdown())
@@ -762,8 +778,16 @@ if __name__ == '__main__':
     # 创建模板目录
     os.makedirs('templates', exist_ok=True)
     
+    # 设置定时任务（只在主进程中设置）
+    setup_scheduler()
+    if not scheduler.running:
+        scheduler.start()
+        logging.info("定时任务调度器已启动")
+    
     print(f"电费监控系统启动中...")
     print(f"Web界面地址: http://localhost:{config.WEB_PORT}")
     print(f"请确保已在config.py中配置正确的用户名密码")
     
-    app.run(host=config.WEB_HOST, port=config.WEB_PORT, debug=config.DEBUG_MODE)
+    # 在生产环境中关闭调试模式避免重复任务
+    debug_mode = getattr(config, 'DEBUG_MODE', False)
+    app.run(host=config.WEB_HOST, port=config.WEB_PORT, debug=debug_mode)
