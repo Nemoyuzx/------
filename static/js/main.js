@@ -127,6 +127,11 @@ function refreshData(event) {
             }
             drawCharts();
             
+            // 更新预测数据
+            if (data.prediction) {
+                updatePredictionDisplay(data.prediction);
+            }
+            
             showAlert('数据刷新成功！', 'success');
         })
         .catch(error => {
@@ -136,6 +141,95 @@ function refreshData(event) {
         .finally(() => {
             setButtonLoading(btn, false);
         });
+}
+
+// 刷新预测数据
+function refreshPrediction() {
+    const btn = event.target.closest('.btn');
+    setButtonLoading(btn, true);
+    
+    fetch('/api/prediction')
+        .then(response => response.json())
+        .then(data => {
+            updatePredictionDisplay(data);
+            showAlert('预测数据已更新！', 'success');
+        })
+        .catch(error => {
+            console.error('刷新预测失败:', error);
+            showAlert('刷新预测失败，请稍后重试', 'error');
+        })
+        .finally(() => {
+            setButtonLoading(btn, false);
+        });
+}
+
+// 更新预测显示
+function updatePredictionDisplay(prediction) {
+    if (!prediction) return;
+    
+    // 更新预警阈值
+    if (prediction.threshold !== undefined) {
+        document.getElementById('prediction-threshold').textContent = prediction.threshold.toFixed(1) + '元';
+    }
+    
+    // 更新日均用电费用
+    if (prediction.daily_usage_avg !== undefined) {
+        document.getElementById('prediction-daily-avg').textContent = prediction.daily_usage_avg.toFixed(2) + '元';
+    }
+    
+    // 更新工作日平均
+    if (prediction.weekday_avg !== undefined) {
+        document.getElementById('prediction-weekday-avg').textContent = prediction.weekday_avg.toFixed(2) + '元';
+    }
+    
+    // 更新周末平均
+    if (prediction.weekend_avg !== undefined) {
+        document.getElementById('prediction-weekend-avg').textContent = prediction.weekend_avg.toFixed(2) + '元';
+    }
+    
+    // 更新预计剩余天数
+    const daysElement = document.getElementById('prediction-days');
+    if (prediction.days_remaining !== null && prediction.days_remaining !== undefined) {
+        daysElement.textContent = prediction.days_remaining.toFixed(1) + '天';
+        
+        // 根据剩余天数设置颜色
+        daysElement.className = '';
+        if (prediction.days_remaining <= 3) {
+            daysElement.className = 'text-danger';
+        } else if (prediction.days_remaining <= 7) {
+            daysElement.className = 'text-warning';
+        }
+    } else {
+        daysElement.textContent = '--';
+        daysElement.className = '';
+    }
+    
+    // 更新预计到达日期
+    document.getElementById('prediction-date').textContent = prediction.predicted_date || '--';
+    
+    // 更新可信度
+    const confidenceElement = document.getElementById('prediction-confidence');
+    confidenceElement.className = 'confidence-' + (prediction.prediction_confidence || 'low');
+    
+    let confidenceText = '低';
+    if (prediction.prediction_confidence === 'high') {
+        confidenceText = '高';
+    } else if (prediction.prediction_confidence === 'medium') {
+        confidenceText = '中';
+    }
+    confidenceElement.textContent = confidenceText;
+    
+    // 更新预测方法
+    const methodElement = document.getElementById('prediction-method');
+    if (methodElement) {
+        let methodText = prediction.prediction_method || 'basic';
+        if (methodText === 'advanced') {
+            methodText = '高级模式';
+        } else if (methodText === 'basic') {
+            methodText = '基础模式';
+        }
+        methodElement.textContent = methodText;
+    }
 }
 
 // 清空所有记录
@@ -415,6 +509,11 @@ setInterval(() => {
                 monthlyChartData = data.balance_trend_monthly;
             }
             drawCharts();
+            
+            // 更新预测数据
+            if (data.prediction) {
+                updatePredictionDisplay(data.prediction);
+            }
         })
         .catch(error => console.error('自动刷新失败:', error));
 }, 600000); // 10分钟
@@ -594,3 +693,75 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+// 显示预测分析
+function showPredictionAnalytics() {
+    fetch('/api/prediction/analytics')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const analytics = data.analytics;
+                let message = `📊 预测分析报告\n\n`;
+                message += `🕒 分析期间：最近 ${analytics.analysis_period} 天\n\n`;
+                message += `📈 用电模式分析：\n`;
+                message += `• 工作日平均：${analytics.usage_pattern.weekday_avg} 元/天 (${analytics.usage_pattern.weekday_samples} 个样本)\n`;
+                message += `• 周末平均：${analytics.usage_pattern.weekend_avg} 元/天 (${analytics.usage_pattern.weekend_samples} 个样本)\n`;
+                message += `• 整体平均：${analytics.usage_pattern.overall_avg} 元/天\n`;
+                message += `• 模式差异：${analytics.usage_pattern.pattern_difference} 元/天\n\n`;
+                
+                if (analytics.usage_pattern.pattern_difference > 1) {
+                    message += `💡 您的工作日和周末用电模式存在明显差异，高级预测模式将提供更准确的预测结果。`;
+                } else {
+                    message += `💡 您的用电模式相对稳定，预测结果具有较高的可信度。`;
+                }
+                
+                alert(message);
+            } else {
+                showAlert('获取预测分析失败：' + data.message, 'error');
+            }
+        })
+        .catch(error => {
+            console.error('获取预测分析失败:', error);
+            showAlert('获取预测分析失败，请稍后重试', 'error');
+        });
+}
+
+// 显示预测准确性统计
+function showPredictionAccuracy() {
+    fetch('/api/prediction/accuracy')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                let message = `🎯 预测准确性统计\n\n`;
+                
+                if (data.overall_stats.total_predictions > 0) {
+                    message += `📊 总体统计：\n`;
+                    message += `• 已评估预测：${data.overall_stats.total_predictions} 个\n`;
+                    message += `• 平均准确率：${data.overall_stats.average_accuracy}%\n`;
+                    message += `• 高准确率预测：${data.overall_stats.high_accuracy_rate}%\n\n`;
+                    
+                    if (data.method_stats.length > 0) {
+                        message += `📈 各方法统计：\n`;
+                        data.method_stats.forEach(method => {
+                            const methodName = method.method === 'advanced' ? '高级模式' : '基础模式';
+                            message += `• ${methodName}：${method.total_predictions}个预测，平均准确率${method.average_accuracy}%\n`;
+                        });
+                    }
+                    
+                    if (data.evaluated_count > 0) {
+                        message += `\n🔄 本次新评估了 ${data.evaluated_count} 个预测记录。`;
+                    }
+                } else {
+                    message += `暂无已评估的预测记录。\n预测准确性需要一段时间的数据积累才能评估。`;
+                }
+                
+                alert(message);
+            } else {
+                showAlert('获取预测准确性失败：' + data.message, 'error');
+            }
+        })
+        .catch(error => {
+            console.error('获取预测准确性失败:', error);
+            showAlert('获取预测准确性失败，请稍后重试', 'error');
+        });
+}

@@ -88,6 +88,25 @@ class ElectricMonitor:
             )
         ''')
         
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS prediction_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                current_balance REAL NOT NULL,
+                threshold REAL NOT NULL,
+                predicted_days REAL,
+                predicted_date TEXT,
+                daily_avg REAL,
+                weekday_avg REAL,
+                weekend_avg REAL,
+                prediction_method TEXT,
+                confidence TEXT,
+                actual_days REAL,
+                accuracy_score REAL,
+                is_evaluated INTEGER DEFAULT 0
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         
@@ -509,15 +528,649 @@ class ElectricMonitor:
         
         conn.close()
         
+        # 获取余额预测（使用配置的预测方法）
+        prediction_method = getattr(config, 'PREDICTION_METHOD', 'advanced')
+        prediction_threshold = getattr(config, 'PREDICTION_THRESHOLD', 10.0)
+        
+        if prediction_method == 'advanced':
+            prediction = self.predict_balance_advanced(prediction_threshold, use_pattern_analysis=True)
+        else:
+            prediction = self.predict_balance_depletion(prediction_threshold)
+        
         return {
             'latest': latest,
             'today_usage': today_usage if today_usage is not None else 0.0,
             'month_usage': month_usage if month_usage is not None else 0.0,
             'balance_trend_hourly': balance_trend_hourly,
             'balance_trend_daily': balance_trend_daily,
-            'balance_trend_monthly': balance_trend_monthly
+            'balance_trend_monthly': balance_trend_monthly,
+            'prediction': prediction
         }
 
+    def predict_balance_depletion(self, threshold=10.0):
+        """
+        预测电费余额何时会降到指定阈值以下
+        
+        Args:
+            threshold: 预警阈值，默认10元
+            
+        Returns:
+            dict: 包含预测结果的字典
+        """
+        try:
+            conn = sqlite3.connect('electric_data.db')
+            cursor = conn.cursor()
+            
+            # 获取当前余额
+            cursor.execute('''
+                SELECT balance FROM electric_records 
+                WHERE balance IS NOT NULL 
+                ORDER BY timestamp DESC 
+                LIMIT 1
+            ''')
+            current_balance_row = cursor.fetchone()
+            
+            if not current_balance_row or current_balance_row[0] is None:
+                logging.warning("无法获取当前余额，预测失败")
+                conn.close()
+                return {
+                    'success': False,
+                    'message': '无法获取当前余额',
+                    'current_balance': 0.0,
+                    'threshold': threshold,
+                    'days_remaining': None,
+                    'predicted_date': None,
+                    'daily_usage_avg': 0.0,
+                    'prediction_confidence': 'low'
+                }
+            
+            current_balance = float(current_balance_row[0])
+            
+            # 如果当前余额已经低于阈值
+            if current_balance <= threshold:
+                conn.close()
+                return {
+                    'success': True,
+                    'message': f'当前余额已低于{threshold}元',
+                    'current_balance': current_balance,
+                    'threshold': threshold,
+                    'days_remaining': 0,
+                    'predicted_date': datetime.now().strftime('%Y-%m-%d'),
+                    'daily_usage_avg': 0.0,
+                    'prediction_confidence': 'high'
+                }
+            
+            # 计算最近7天的每日平均用电费用
+            cursor.execute('''
+                SELECT date(timestamp) as date, 
+                       MIN(balance) as min_balance, 
+                       MAX(balance) as max_balance,
+                       COUNT(*) as record_count
+                FROM electric_records 
+                WHERE timestamp > datetime('now', '-7 days')
+                AND balance IS NOT NULL
+                GROUP BY date(timestamp)
+                HAVING record_count >= 2
+                ORDER BY date DESC
+            ''')
+            daily_usage_data = cursor.fetchall()
+            
+            if len(daily_usage_data) < 3:
+                # 数据不足，使用最近30天的数据计算平均值
+                cursor.execute('''
+                    SELECT 
+                        (MAX(balance) - MIN(balance)) / 
+                        CAST((julianday('now') - julianday(MIN(timestamp))) AS REAL) as daily_avg
+                    FROM electric_records 
+                    WHERE timestamp > datetime('now', '-30 days')
+                    AND balance IS NOT NULL
+                ''')
+                result = cursor.fetchone()
+                daily_usage_avg = abs(float(result[0])) if result and result[0] else 1.0
+                confidence = 'low'
+            else:
+                # 计算每日用电费用（取正值）
+                daily_usages = []
+                for i, (date, min_bal, max_bal, count) in enumerate(daily_usage_data):
+                    if max_bal and min_bal:
+                        daily_cost = abs(float(max_bal) - float(min_bal))
+                        # 如果当天有充值（余额增加很多），则跳过
+                        if daily_cost < 50:  # 假设单日用电不会超过50元
+                            daily_usages.append(daily_cost)
+                
+                if daily_usages:
+                    daily_usage_avg = sum(daily_usages) / len(daily_usages)
+                    confidence = 'high' if len(daily_usages) >= 5 else 'medium'
+                else:
+                    daily_usage_avg = 1.0
+                    confidence = 'low'
+            
+            # 如果平均用电费用太小，设置最小值
+            if daily_usage_avg < 0.1:
+                daily_usage_avg = 1.0
+                confidence = 'low'
+            
+            # 计算预计天数
+            remaining_amount = current_balance - threshold
+            if daily_usage_avg > 0:
+                days_remaining = remaining_amount / daily_usage_avg
+                predicted_date = (datetime.now() + timedelta(days=int(days_remaining))).strftime('%Y-%m-%d')
+            else:
+                days_remaining = None
+                predicted_date = None
+                confidence = 'low'
+            
+            conn.close()
+            
+            logging.info(f"余额预测完成: 当前余额={current_balance}元, 日均用电费用={daily_usage_avg}元, 预计{days_remaining:.1f}天后降到{threshold}元以下")
+            
+            return {
+                'success': True,
+                'message': '预测成功',
+                'current_balance': current_balance,
+                'threshold': threshold,
+                'days_remaining': round(days_remaining, 1) if days_remaining else None,
+                'predicted_date': predicted_date,
+                'daily_usage_avg': round(daily_usage_avg, 2),
+                'prediction_confidence': confidence
+            }
+            
+        except Exception as e:
+            logging.error(f"余额预测时出错: {str(e)}")
+            return {
+                'success': False,
+                'message': f'预测失败: {str(e)}',
+                'current_balance': 0.0,
+                'threshold': threshold,
+                'days_remaining': None,
+                'predicted_date': None,
+                'daily_usage_avg': 0.0,
+                'prediction_confidence': 'low'
+            }
+    
+    def send_prediction_alert(self, prediction_data):
+        """
+        发送预测预警邮件
+        
+        Args:
+            prediction_data: 预测数据字典
+        """
+        try:
+            if not prediction_data or not prediction_data.get('success'):
+                return
+            
+            days_remaining = prediction_data.get('days_remaining')
+            if not days_remaining or days_remaining > 7:  # 只有7天内的预测才发送预警
+                return
+            
+            # 检查是否在24小时内已发送过预测预警
+            conn = sqlite3.connect('electric_data.db')
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT COUNT(*) FROM alerts 
+                WHERE alert_type = 'prediction_warning' 
+                AND datetime(sent_time) > datetime('now', '-24 hours')
+            ''')
+            
+            recent_alerts = cursor.fetchone()[0]
+            if recent_alerts > 0:
+                logging.info("24小时内已发送过预测预警，跳过发送")
+                conn.close()
+                return
+            
+            # 获取提醒邮箱列表
+            alert_emails = []
+            if hasattr(config, 'ALERT_EMAILS') and config.ALERT_EMAILS:
+                alert_emails = config.ALERT_EMAILS
+            
+            if not alert_emails:
+                logging.warning("未配置预警邮箱，无法发送预测预警")
+                conn.close()
+                return
+            
+            current_balance = prediction_data.get('current_balance', 0)
+            threshold = prediction_data.get('threshold', 10)
+            predicted_date = prediction_data.get('predicted_date', '未知')
+            daily_avg = prediction_data.get('daily_usage_avg', 0)
+            confidence = prediction_data.get('prediction_confidence', 'low')
+            
+            # 根据可信度设置提醒级别
+            confidence_text = {'high': '高', 'medium': '中', 'low': '低'}.get(confidence, '低')
+            urgency_level = '🔴 紧急' if days_remaining <= 3 else '🟡 提醒'
+            
+            # 创建邮件内容
+            body = f"""
+您好！
+
+根据您的用电模式分析，预测您的电费余额可能即将不足：
+
+{urgency_level} 预测预警
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 当前状况：
+• 当前余额：{current_balance:.2f} 元
+• 预警阈值：{threshold:.1f} 元
+• 日均用电费用：{daily_avg:.2f} 元
+
+🔮 预测结果：
+• 预计剩余天数：{days_remaining:.1f} 天
+• 预计到达日期：{predicted_date}
+• 预测可信度：{confidence_text}
+
+💡 建议：
+{"• 建议您尽快充值，避免断电影响生活" if days_remaining <= 3 else "• 请关注电费余额，适时进行充值"}
+
+🔗 充值链接：
+https://app.bupt.edu.cn/buptdf/wap/default/chong
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+查询时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+本预测基于最近的用电历史数据分析得出，仅供参考。
+
+---
+电费自动提醒系统 - 智能预测服务
+            """
+            
+            # 连接SMTP服务器
+            server = smtplib.SMTP(config.EMAIL_SMTP_SERVER, config.EMAIL_SMTP_PORT)
+            server.starttls()
+            server.login(config.EMAIL_USERNAME, config.EMAIL_PASSWORD)
+            
+            # 发送给每个邮箱
+            sent_count = 0
+            for email in alert_emails:
+                try:
+                    msg = MIMEMultipart()
+                    msg['From'] = config.EMAIL_USERNAME
+                    msg['To'] = email
+                    msg['Subject'] = f"🔮 电费余额预测预警 - 预计{days_remaining:.1f}天后不足"
+                    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+                    
+                    text = msg.as_string()
+                    server.sendmail(config.EMAIL_USERNAME, email, text)
+                    sent_count += 1
+                    logging.info(f"预测预警邮件已发送到: {email}")
+                except Exception as e:
+                    logging.error(f"发送预测预警邮件到 {email} 失败: {str(e)}")
+            
+            server.quit()
+            
+            # 记录预警
+            cursor.execute('''
+                INSERT INTO alerts (alert_type, message, sent)
+                VALUES (?, ?, ?)
+            ''', ('prediction_warning', f'预测预警: 预计{days_remaining:.1f}天后余额降到{threshold}元以下，已发送{sent_count}封邮件', 1))
+            
+            conn.commit()
+            conn.close()
+            
+            logging.info(f"预测预警邮件发送完成，成功发送{sent_count}封邮件，预计{days_remaining:.1f}天后余额不足")
+            
+        except Exception as e:
+            logging.error(f"发送预测预警失败: {str(e)}")
+    
+    def predict_balance_advanced(self, threshold=10.0, use_pattern_analysis=True):
+        """
+        高级余额预测，考虑工作日/周末用电模式差异
+        
+        Args:
+            threshold: 预警阈值，默认10元
+            use_pattern_analysis: 是否使用模式分析，默认True
+            
+        Returns:
+            dict: 包含详细预测结果的字典
+        """
+        try:
+            conn = sqlite3.connect('electric_data.db')
+            cursor = conn.cursor()
+            
+            # 获取当前余额
+            cursor.execute('''
+                SELECT balance FROM electric_records 
+                WHERE balance IS NOT NULL 
+                ORDER BY timestamp DESC 
+                LIMIT 1
+            ''')
+            current_balance_row = cursor.fetchone()
+            
+            if not current_balance_row or current_balance_row[0] is None:
+                logging.warning("无法获取当前余额，高级预测失败")
+                conn.close()
+                return self.predict_balance_depletion(threshold)  # 回退到基础预测
+            
+            current_balance = float(current_balance_row[0])
+            
+            # 如果当前余额已经低于阈值
+            if current_balance <= threshold:
+                conn.close()
+                return {
+                    'success': True,
+                    'message': f'当前余额已低于{threshold}元',
+                    'current_balance': current_balance,
+                    'threshold': threshold,
+                    'days_remaining': 0,
+                    'predicted_date': datetime.now().strftime('%Y-%m-%d'),
+                    'daily_usage_avg': 0.0,
+                    'weekday_avg': 0.0,
+                    'weekend_avg': 0.0,
+                    'prediction_confidence': 'high',
+                    'prediction_method': 'advanced'
+                }
+            
+            if not use_pattern_analysis:
+                # 简单预测
+                basic_prediction = self.predict_balance_depletion(threshold)
+                basic_prediction['prediction_method'] = 'basic'
+                return basic_prediction
+            
+            # 获取最近30天的详细数据进行模式分析
+            cursor.execute('''
+                SELECT 
+                    date(timestamp) as date,
+                    strftime('%w', timestamp) as weekday,
+                    MIN(balance) as min_balance,
+                    MAX(balance) as max_balance,
+                    COUNT(*) as record_count
+                FROM electric_records 
+                WHERE timestamp > datetime('now', '-30 days')
+                AND balance IS NOT NULL
+                GROUP BY date(timestamp)
+                HAVING record_count >= 2
+                ORDER BY date DESC
+            ''')
+            
+            usage_data = cursor.fetchall()
+            
+            if len(usage_data) < 7:
+                logging.info("数据不足，使用基础预测方法")
+                conn.close()
+                basic_prediction = self.predict_balance_depletion(threshold)
+                basic_prediction['prediction_method'] = 'basic_fallback'
+                return basic_prediction
+            
+            # 分析工作日和周末的用电模式
+            weekday_usages = []  # 周一到周五
+            weekend_usages = []  # 周六周日
+            
+            for date, weekday, min_bal, max_bal, count in usage_data:
+                if max_bal and min_bal:
+                    daily_cost = abs(float(max_bal) - float(min_bal))
+                    # 过滤异常数据（充值等）
+                    if daily_cost < 50:
+                        weekday_num = int(weekday)  # 0=周日, 1=周一, ..., 6=周六
+                        if weekday_num == 0 or weekday_num == 6:  # 周末
+                            weekend_usages.append(daily_cost)
+                        else:  # 工作日
+                            weekday_usages.append(daily_cost)
+            
+            # 计算工作日和周末的平均用电费用
+            weekday_avg = sum(weekday_usages) / len(weekday_usages) if weekday_usages else 0
+            weekend_avg = sum(weekend_usages) / len(weekend_usages) if weekend_usages else 0
+            
+            # 如果某种模式数据不足，使用总体平均值
+            if not weekday_usages or not weekend_usages:
+                all_usages = weekday_usages + weekend_usages
+                if all_usages:
+                    overall_avg = sum(all_usages) / len(all_usages)
+                    weekday_avg = weekday_avg or overall_avg
+                    weekend_avg = weekend_avg or overall_avg
+                else:
+                    weekday_avg = weekend_avg = 1.0
+            
+            # 设置最小用电费用
+            weekday_avg = max(weekday_avg, 0.1)
+            weekend_avg = max(weekend_avg, 0.1)
+            
+            # 计算预测（考虑一周的循环）
+            current_date = datetime.now()
+            remaining_amount = current_balance - threshold
+            total_cost = 0
+            days_count = 0
+            prediction_date = current_date
+            
+            # 模拟未来的用电，直到余额低于阈值
+            while total_cost < remaining_amount and days_count < 365:  # 最多预测一年
+                prediction_date = current_date + timedelta(days=days_count)
+                weekday_num = prediction_date.weekday()  # 0=周一, 6=周日
+                
+                if weekday_num >= 5:  # 周末 (5=周六, 6=周日)
+                    daily_cost = weekend_avg
+                else:  # 工作日
+                    daily_cost = weekday_avg
+                
+                total_cost += daily_cost
+                days_count += 1
+            
+            # 计算置信度
+            data_quality = min(len(weekday_usages) + len(weekend_usages), 20) / 20
+            pattern_clarity = abs(weekday_avg - weekend_avg) / max(weekday_avg, weekend_avg)
+            confidence_score = (data_quality + pattern_clarity) / 2
+            
+            if confidence_score > 0.7:
+                confidence = 'high'
+            elif confidence_score > 0.4:
+                confidence = 'medium'
+            else:
+                confidence = 'low'
+            
+            # 计算整体日均用电费用（用于兼容性）
+            overall_daily_avg = (weekday_avg * 5 + weekend_avg * 2) / 7
+            
+            conn.close()
+            
+            logging.info(f"高级余额预测完成: 当前余额={current_balance}元, 工作日均={weekday_avg:.2f}元, 周末均={weekend_avg:.2f}元, 预计{days_count}天后降到{threshold}元以下")
+            
+            return {
+                'success': True,
+                'message': '高级预测成功',
+                'current_balance': current_balance,
+                'threshold': threshold,
+                'days_remaining': round(days_count, 1) if days_count > 0 else None,
+                'predicted_date': prediction_date.strftime('%Y-%m-%d') if days_count > 0 else None,
+                'daily_usage_avg': round(overall_daily_avg, 2),
+                'weekday_avg': round(weekday_avg, 2),
+                'weekend_avg': round(weekend_avg, 2),
+                'prediction_confidence': confidence,
+                'prediction_method': 'advanced',
+                'data_points': {
+                    'weekday_samples': len(weekday_usages),
+                    'weekend_samples': len(weekend_usages),
+                    'confidence_score': round(confidence_score, 2)
+                }
+            }
+            
+        except Exception as e:
+            logging.error(f"高级余额预测时出错: {str(e)}")
+            # 回退到基础预测
+            basic_prediction = self.predict_balance_depletion(threshold)
+            basic_prediction['prediction_method'] = 'basic_error_fallback'
+            return basic_prediction
+    
+    def save_prediction_record(self, prediction_data):
+        """
+        保存预测记录用于后续准确性评估
+        
+        Args:
+            prediction_data: 预测结果数据
+        """
+        try:
+            conn = sqlite3.connect('electric_data.db')
+            cursor = conn.cursor()
+            
+            # 创建预测记录表（如果不存在）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS prediction_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    current_balance REAL NOT NULL,
+                    threshold REAL NOT NULL,
+                    predicted_days REAL,
+                    predicted_date TEXT,
+                    daily_avg REAL,
+                    weekday_avg REAL,
+                    weekend_avg REAL,
+                    prediction_method TEXT,
+                    confidence TEXT,
+                    actual_days REAL,
+                    accuracy_score REAL,
+                    is_evaluated INTEGER DEFAULT 0
+                )
+            ''')
+            
+            # 插入预测记录
+            cursor.execute('''
+                INSERT INTO prediction_records 
+                (timestamp, current_balance, threshold, predicted_days, predicted_date, 
+                 daily_avg, weekday_avg, weekend_avg, prediction_method, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                prediction_data.get('current_balance', 0),
+                prediction_data.get('threshold', 10),
+                prediction_data.get('days_remaining'),
+                prediction_data.get('predicted_date'),
+                prediction_data.get('daily_usage_avg', 0),
+                prediction_data.get('weekday_avg', 0),
+                prediction_data.get('weekend_avg', 0),
+                prediction_data.get('prediction_method', 'basic'),
+                prediction_data.get('prediction_confidence', 'low')
+            ))
+            
+            conn.commit()
+            conn.close()
+            logging.info("预测记录已保存")
+            
+        except Exception as e:
+            logging.error(f"保存预测记录失败: {str(e)}")
+
+    def evaluate_prediction_accuracy(self):
+        """
+        评估历史预测的准确性
+        
+        Returns:
+            dict: 预测准确性统计信息
+        """
+        try:
+            conn = sqlite3.connect('electric_data.db')
+            cursor = conn.cursor()
+            
+            # 获取未评估的预测记录
+            cursor.execute('''
+                SELECT id, timestamp, current_balance, threshold, predicted_days, 
+                       predicted_date, prediction_method
+                FROM prediction_records 
+                WHERE is_evaluated = 0 AND predicted_days IS NOT NULL
+                ORDER BY timestamp ASC
+            ''')
+            
+            unevaluated_predictions = cursor.fetchall()
+            evaluated_count = 0
+            
+            for pred_id, pred_timestamp, pred_balance, threshold, predicted_days, predicted_date, method in unevaluated_predictions:
+                # 查找实际到达阈值的时间
+                cursor.execute('''
+                    SELECT timestamp, balance
+                    FROM electric_records
+                    WHERE timestamp > ? AND balance <= ?
+                    ORDER BY timestamp ASC
+                    LIMIT 1
+                ''', (pred_timestamp, threshold))
+                
+                actual_result = cursor.fetchone()
+                
+                if actual_result:
+                    actual_timestamp, actual_balance = actual_result
+                    
+                    # 计算实际天数
+                    pred_dt = datetime.strptime(pred_timestamp, '%Y-%m-%d %H:%M:%S')
+                    actual_dt = datetime.strptime(actual_timestamp, '%Y-%m-%d %H:%M:%S')
+                    actual_days = (actual_dt - pred_dt).total_seconds() / (24 * 3600)
+                    
+                    # 计算准确性分数 (0-100, 100为完全准确)
+                    if predicted_days > 0:
+                        error_ratio = abs(actual_days - predicted_days) / predicted_days
+                        accuracy_score = max(0, 100 - error_ratio * 100)
+                    else:
+                        accuracy_score = 0
+                    
+                    # 更新预测记录
+                    cursor.execute('''
+                        UPDATE prediction_records 
+                        SET actual_days = ?, accuracy_score = ?, is_evaluated = 1
+                        WHERE id = ?
+                    ''', (actual_days, accuracy_score, pred_id))
+                    
+                    evaluated_count += 1
+            
+            conn.commit()
+            
+            # 获取准确性统计
+            cursor.execute('''
+                SELECT 
+                    prediction_method,
+                    COUNT(*) as total_predictions,
+                    AVG(accuracy_score) as avg_accuracy,
+                    MIN(accuracy_score) as min_accuracy,
+                    MAX(accuracy_score) as max_accuracy,
+                    COUNT(CASE WHEN accuracy_score >= 80 THEN 1 END) as high_accuracy_count
+                FROM prediction_records 
+                WHERE is_evaluated = 1 AND accuracy_score IS NOT NULL
+                GROUP BY prediction_method
+            ''')
+            
+            accuracy_stats = cursor.fetchall()
+            
+            # 获取总体统计
+            cursor.execute('''
+                SELECT 
+                    COUNT(*) as total_evaluated,
+                    AVG(accuracy_score) as overall_accuracy,
+                    COUNT(CASE WHEN accuracy_score >= 80 THEN 1 END) as high_accuracy_total
+                FROM prediction_records 
+                WHERE is_evaluated = 1 AND accuracy_score IS NOT NULL
+            ''')
+            
+            overall_stats = cursor.fetchone()
+            
+            conn.close()
+            
+            result = {
+                'success': True,
+                'evaluated_count': evaluated_count,
+                'overall_stats': {
+                    'total_predictions': overall_stats[0] if overall_stats else 0,
+                    'average_accuracy': round(overall_stats[1], 2) if overall_stats and overall_stats[1] else 0,
+                    'high_accuracy_rate': round((overall_stats[2] / overall_stats[0] * 100), 2) if overall_stats and overall_stats[0] > 0 else 0
+                },
+                'method_stats': []
+            }
+            
+            for method, total, avg_acc, min_acc, max_acc, high_acc_count in accuracy_stats:
+                result['method_stats'].append({
+                    'method': method,
+                    'total_predictions': total,
+                    'average_accuracy': round(avg_acc, 2) if avg_acc else 0,
+                    'min_accuracy': round(min_acc, 2) if min_acc else 0,
+                    'max_accuracy': round(max_acc, 2) if max_acc else 0,
+                    'high_accuracy_rate': round((high_acc_count / total * 100), 2) if total > 0 else 0
+                })
+            
+            if evaluated_count > 0:
+                logging.info(f"预测准确性评估完成，评估了{evaluated_count}个预测记录")
+            
+            return result
+            
+        except Exception as e:
+            logging.error(f"评估预测准确性失败: {str(e)}")
+            return {
+                'success': False,
+                'message': f'评估失败: {str(e)}',
+                'evaluated_count': 0,
+                'overall_stats': {'total_predictions': 0, 'average_accuracy': 0, 'high_accuracy_rate': 0},
+                'method_stats': []
+            }
+    
 # 创建监控实例
 monitor = ElectricMonitor()
 
@@ -550,9 +1203,16 @@ def api_check():
         data = monitor.get_electric_data()
         if data:
             monitor.save_data(data)
-              # 检查是否需要发送预警
+              # 检查是否需要发送传统余额预警
             if float(data['balance']) < config.LOW_BALANCE_THRESHOLD:
                 monitor.send_alert(data['balance'])
+            
+            # 检查预测性预警
+            prediction_data = monitor.predict_balance_depletion(config.LOW_BALANCE_THRESHOLD)
+            if (prediction_data.get('success') and 
+                prediction_data.get('days_remaining') is not None and
+                prediction_data.get('days_remaining') <= 7):
+                monitor.send_prediction_alert(prediction_data)
             
             return jsonify({
                 'success': True, 
@@ -573,6 +1233,7 @@ def api_clear_records():
         cursor = conn.cursor()
         cursor.execute('DELETE FROM electric_records')
         cursor.execute('DELETE FROM alerts')
+        cursor.execute('DELETE FROM prediction_records')
         conn.commit()
         conn.close()
         
@@ -601,6 +1262,40 @@ def api_delete_record(record_id):
     except Exception as e:
         logging.error(f"删除记录失败: {str(e)}")
         return jsonify({'success': False, 'message': f'删除失败: {str(e)}'})
+
+@app.route('/api/prediction', methods=['GET'])
+def api_get_prediction():
+    """获取余额预测API"""
+    try:
+        # 获取阈值参数，默认使用配置值
+        threshold = float(request.args.get('threshold', getattr(config, 'PREDICTION_THRESHOLD', 10.0)))
+        
+        # 获取预测方法参数
+        method = request.args.get('method', getattr(config, 'PREDICTION_METHOD', 'advanced'))
+        
+        # 获取预测数据
+        if method == 'advanced':
+            prediction = monitor.predict_balance_advanced(threshold, use_pattern_analysis=True)
+        else:
+            prediction = monitor.predict_balance_depletion(threshold)
+        
+        # 保存预测记录（如果启用）
+        if getattr(config, 'PREDICTION_ACCURACY_EVALUATION', True) and prediction.get('success'):
+            monitor.save_prediction_record(prediction)
+        
+        return jsonify(prediction)
+    except Exception as e:
+        logging.error(f"获取预测失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'获取预测失败: {str(e)}',
+            'current_balance': 0.0,
+            'threshold': 10.0,
+            'days_remaining': None,
+            'predicted_date': None,
+            'daily_usage_avg': 0.0,
+            'prediction_confidence': 'low'
+        })
 
 @app.route('/api/config', methods=['GET'])
 def api_get_config():
@@ -772,9 +1467,34 @@ def scheduled_check():
             monitor.save_data(data)
             logging.info(f"定时检查完成 - 余额: {data['balance']}元")
             
-            # 检查是否需要发送预警
+            # 检查是否需要发送传统余额预警
             if float(data['balance']) < config.LOW_BALANCE_THRESHOLD:
                 monitor.send_alert(data['balance'])
+            
+            # 检查预测性预警
+            prediction_threshold = getattr(config, 'PREDICTION_THRESHOLD', config.LOW_BALANCE_THRESHOLD)
+            alert_days = getattr(config, 'PREDICTION_ALERT_DAYS', 7)
+            prediction_method = getattr(config, 'PREDICTION_METHOD', 'advanced')
+            
+            if prediction_method == 'advanced':
+                prediction_data = monitor.predict_balance_advanced(prediction_threshold, use_pattern_analysis=True)
+            else:
+                prediction_data = monitor.predict_balance_depletion(prediction_threshold)
+            
+            # 保存预测记录（如果启用）
+            if getattr(config, 'PREDICTION_ACCURACY_EVALUATION', True) and prediction_data.get('success'):
+                monitor.save_prediction_record(prediction_data)
+            
+            # 发送预测预警
+            if (prediction_data.get('success') and 
+                prediction_data.get('days_remaining') is not None and
+                prediction_data.get('days_remaining') <= alert_days):
+                monitor.send_prediction_alert(prediction_data)
+            
+            # 定期评估预测准确性
+            if getattr(config, 'PREDICTION_ACCURACY_EVALUATION', True):
+                monitor.evaluate_prediction_accuracy()
+                
         else:
             logging.error("定时检查失败 - 无法获取数据")
     except Exception as e:
@@ -809,32 +1529,11 @@ if __name__ == '__main__':
     # 创建模板目录
     os.makedirs('templates', exist_ok=True)
     
-    # 设置定时任务调度器
-    global scheduler
+    # 启动定时任务调度器
     scheduler = BackgroundScheduler()
-    # 设置定时任务（只在主进程中设置）
     setup_scheduler()
     if not scheduler.running:
         scheduler.start()
         logging.info("定时任务调度器已启动")
-    
-    logging.info("电费监控系统启动中...")
-    logging.info(f"Web界面地址: http://localhost:{config.WEB_PORT}")
-    logging.info("请确保已在config.py中配置正确的用户名密码")
-
-    # 打印scheduler的所有任务
-    logging.info("当前调度器任务列表:")
-    for job in scheduler.get_jobs():
-        logging.info(f"任务ID: {job.id}, 下次执行时间: {job.next_run_time}, 触发器: {job.trigger}")
-    
-    # 在生产环境中关闭调试模式避免重复任务
     debug_mode = getattr(config, 'DEBUG_MODE', False)
-    
-    # 添加这个环境变量可以禁用Flask的自动重载器
-    os.environ['FLASK_DEBUG'] = '0' if not debug_mode else '1'
-    
-    # 如果在调试模式下，添加警告
-    if debug_mode:
-        logging.warning("警告：调试模式已启用，可能导致定时任务重复初始化。生产环境请在config.py中设置DEBUG_MODE=False")
-    
-    app.run(host=config.WEB_HOST, port=config.WEB_PORT, debug=debug_mode, use_reloader=debug_mode)
+    app.run(host=getattr(config, 'WEB_HOST', '0.0.0.0'), port=getattr(config, 'WEB_PORT', 5100), debug=debug_mode)
