@@ -33,6 +33,65 @@
             </div>
         </div>
         
+        <!-- 余额预测 -->
+        <div class="card">
+            <h2>余额预测</h2>
+            <div class="prediction-panel">
+                <div class="prediction-info">
+                    <div class="prediction-item">
+                        <span class="prediction-label">预警阈值:</span>
+                        <span id="prediction-threshold">{{ "%.1f" | format(stats.prediction.threshold or 10.0) }}元</span>
+                    </div>
+                    <div class="prediction-item">
+                        <span class="prediction-label">日均用电费用:</span>
+                        <span id="prediction-daily-avg">{{ "%.2f" | format(stats.prediction.daily_usage_avg or 0) }}元</span>
+                    </div>
+                    <div class="prediction-item">
+                        <span class="prediction-label">工作日平均:</span>
+                        <span id="prediction-weekday-avg">{{ "%.2f" | format(stats.prediction.weekday_avg or 0) }}元</span>
+                    </div>
+                    <div class="prediction-item">
+                        <span class="prediction-label">周末平均:</span>
+                        <span id="prediction-weekend-avg">{{ "%.2f" | format(stats.prediction.weekend_avg or 0) }}元</span>
+                    </div>
+                    <div class="prediction-item">
+                        <span class="prediction-label">预计剩余天数:</span>
+                        <span id="prediction-days" class="{% if stats.prediction.days_remaining and stats.prediction.days_remaining <= 7 %}text-warning{% elif stats.prediction.days_remaining and stats.prediction.days_remaining <= 3 %}text-danger{% endif %}">
+                            {% if stats.prediction.days_remaining %}{{ "%.1f" | format(stats.prediction.days_remaining) }}天{% else %}--{% endif %}
+                        </span>
+                    </div>
+                    <div class="prediction-item">
+                        <span class="prediction-label">预计到达日期:</span>
+                        <span id="prediction-date">{{ stats.prediction.predicted_date or '--' }}</span>
+                    </div>
+                    <div class="prediction-item">
+                        <span class="prediction-label">预测可信度:</span>
+                        <span id="prediction-confidence" class="confidence-{{ stats.prediction.prediction_confidence or 'low' }}">
+                            {% if stats.prediction.prediction_confidence == 'high' %}高
+                            {% elif stats.prediction.prediction_confidence == 'medium' %}中
+                            {% else %}低{% endif %}
+                        </span>
+                    </div>
+                    <div class="prediction-item">
+                        <span class="prediction-label">预测方法:</span>
+                        <span id="prediction-method">{{ stats.prediction.prediction_method or 'basic' }}</span>
+                    </div>
+                </div>
+                <div class="prediction-controls">
+                    <button class="btn btn-primary" onclick="refreshPrediction()">
+                        <span class="spinner"></span>
+                        <span class="btn-text">刷新预测</span>
+                    </button>
+                    <button class="btn btn-info" onclick="showPredictionAnalytics()">
+                        <span class="btn-text">预测分析</span>
+                    </button>
+                    <button class="btn btn-success" onclick="showPredictionAccuracy()">
+                        <span class="btn-text">准确性统计</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
         <!-- 控制面板 -->
         <div class="card">
             <h2>控制面板</h2>

@@ -33,3 +33,10 @@ DEBUG_MODE = True     # 调试模式
 # Gmail: smtp.gmail.com, 587
 # 163邮箱: smtp.163.com, 25
 # 126邮箱: smtp.126.com, 25
+
+# 预测系统配置
+PREDICTION_THRESHOLD = 10  # 预测预警阈值（元）
+PREDICTION_ALERT_DAYS = 7  # 提前多少天发送预测预警
+PREDICTION_METHOD = "advanced"  # 预测方法：basic 或 advanced
+PREDICTION_LOOKBACK_DAYS = 30  # 预测分析的历史数据天数
+PREDICTION_ACCURACY_EVALUATION = True  # 是否启用预测准确性评估

@@ -52,6 +52,77 @@ body {
     margin-bottom: 30px;
 }
 
+/* 余额预测样式 */
+.prediction-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.prediction-info {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 15px;
+}
+
+.prediction-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #007bff;
+}
+
+.prediction-label {
+    font-weight: 600;
+    color: #495057;
+}
+
+.prediction-item span:last-child {
+    font-weight: bold;
+    color: #212529;
+}
+
+.text-warning {
+    color: #fd7e14 !important;
+}
+
+.text-danger {
+    color: #dc3545 !important;
+}
+
+.confidence-high {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.confidence-medium {
+    color: #fd7e14;
+    font-weight: bold;
+}
+
+.confidence-low {
+    color: #6c757d;
+    font-weight: bold;
+}
+
+.prediction-controls {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    padding-top: 15px;
+    border-top: 1px solid #dee2e6;
+    flex-wrap: wrap;
+}
+
+.prediction-controls .btn {
+    flex: 1;
+    min-width: 120px;
+    max-width: 150px;
+}
+
 .stat-item {
     text-align: center;
     padding: 20px;
