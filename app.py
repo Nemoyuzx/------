@@ -256,8 +256,8 @@ class ElectricMonitor:
             
             # 获取当天最早的记录，用于计算今日用电量
             cursor.execute('''
-                SELECT * FROM electric_records 
-                WHERE date(timestamp) = date('now')
+                SELECT * FROM electric_records
+                WHERE timestamp >= datetime('now', 'localtime', 'start of day')
                 AND balance IS NOT NULL
                 ORDER BY timestamp ASC
                 LIMIT 1
@@ -266,8 +266,8 @@ class ElectricMonitor:
             
             # 获取本月最早的记录，用于计算月度用电量
             cursor.execute('''
-                SELECT * FROM electric_records 
-                WHERE strftime('%Y-%m', timestamp) = strftime('%Y-%m', 'now')
+                SELECT * FROM electric_records
+                WHERE timestamp >= datetime('now', 'localtime', 'start of month')
                 AND balance IS NOT NULL
                 ORDER BY timestamp ASC
                 LIMIT 1
@@ -347,9 +347,9 @@ class ElectricMonitor:
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT * FROM alerts 
-                WHERE alert_type = 'low_balance' 
-                AND timestamp > datetime('now', '-24 hours')
+                SELECT * FROM alerts
+                WHERE alert_type = 'low_balance'
+                AND timestamp > datetime('now', 'localtime', '-24 hours')
                 AND sent = 1
             ''')
             
@@ -454,23 +454,31 @@ class ElectricMonitor:
         
         # 今日用电量
         cursor.execute('''
-            SELECT AVG(usage_today) FROM electric_records 
-            WHERE date(timestamp) = date('now')
+            SELECT usage_today FROM electric_records
+            WHERE timestamp >= datetime('now', 'localtime', 'start of day')
             AND usage_today IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 1
         ''')
-        today_usage = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        today_usage = row[0] if row else None
         
         # 本月用电量
         cursor.execute('''
-            SELECT AVG(usage_month) FROM electric_records 
-            WHERE strftime('%Y-%m', timestamp) = strftime('%Y-%m', 'now')
+            SELECT usage_month FROM electric_records
+            WHERE timestamp >= datetime('now', 'localtime', 'start of month')
             AND usage_month IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 1
         ''')
-        month_usage = cursor.fetchone()[0]        # 余额趋势（最近24小时，按小时统计）
+        row = cursor.fetchone()
+        month_usage = row[0] if row else None
+
+        # 余额趋势（最近24小时，按小时统计）
         cursor.execute('''
             SELECT strftime('%Y-%m-%d %H:00:00', timestamp) as hour, AVG(balance) as avg_balance
-            FROM electric_records 
-            WHERE timestamp > datetime('now', '-24 hours')
+            FROM electric_records
+            WHERE timestamp > datetime('now', 'localtime', '-24 hours')
             AND balance IS NOT NULL
             GROUP BY strftime('%Y-%m-%d %H', timestamp)
             ORDER BY hour
@@ -480,8 +488,8 @@ class ElectricMonitor:
         # 余额趋势（最近30天，按天统计）
         cursor.execute('''
             SELECT date(timestamp) as date, AVG(balance) as avg_balance
-            FROM electric_records 
-            WHERE timestamp > datetime('now', '-30 days')
+            FROM electric_records
+            WHERE timestamp > datetime('now', 'localtime', '-30 days')
             AND balance IS NOT NULL
             GROUP BY date(timestamp)
             ORDER BY date
@@ -491,8 +499,8 @@ class ElectricMonitor:
         # 余额趋势（最近12个月，按月统计）
         cursor.execute('''
             SELECT strftime('%Y-%m', timestamp) as month, AVG(balance) as avg_balance
-            FROM electric_records 
-            WHERE timestamp > datetime('now', '-12 months')
+            FROM electric_records
+            WHERE timestamp > datetime('now', 'localtime', '-12 months')
             AND balance IS NOT NULL
             GROUP BY strftime('%Y-%m', timestamp)
             ORDER BY month
