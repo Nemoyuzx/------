@@ -1456,6 +1456,48 @@ def api_clear_logs():
         logging.error(f"清空日志失败: {str(e)}")
         return jsonify({'success': False, 'message': f'清空日志失败: {str(e)}'})
 
+@app.route('/api/prediction/analytics')
+def api_prediction_analytics():
+    """预测分析API"""
+    try:
+        # 示例数据结构，后续可替换为真实分析
+        analytics = {
+            "analysis_period": 30,
+            "usage_pattern": {
+                "weekday_avg": 2.35,
+                "weekday_samples": 20,
+                "weekend_avg": 1.85,
+                "weekend_samples": 8,
+                "overall_avg": 2.15,
+                "pattern_difference": 0.5
+            }
+        }
+        return jsonify({"success": True, "analytics": analytics})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+@app.route('/api/prediction/accuracy')
+def api_prediction_accuracy():
+    """预测准确性统计API"""
+    try:
+        # 示例数据结构，后续可替换为真实统计
+        data = {
+            "success": True,
+            "overall_stats": {
+                "total_predictions": 12,
+                "average_accuracy": 92.3,
+                "high_accuracy_rate": 75.0
+            },
+            "method_stats": [
+                {"method": "advanced", "total_predictions": 7, "average_accuracy": 95.1},
+                {"method": "basic", "total_predictions": 5, "average_accuracy": 88.0}
+            ],
+            "evaluated_count": 2
+        }
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
 # 定时任务
 def scheduled_check():
     """定时检查电费"""
