@@ -710,7 +710,7 @@ class ElectricMonitor:
             cursor.execute('''
                 SELECT COUNT(*) FROM alerts 
                 WHERE alert_type = 'prediction_warning' 
-                AND datetime(sent_time) > datetime('now', '-24 hours')
+                AND datetime(timestamp) > datetime('now', '-24 hours')
             ''')
             
             recent_alerts = cursor.fetchone()[0]
