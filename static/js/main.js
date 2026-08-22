@@ -46,10 +46,11 @@ document.addEventListener('DOMContentLoaded', function() {
 function showAlert(message, type = 'success') {
     const alertEl = document.createElement('div');
     alertEl.className = `alert alert-${type}`;
-    alertEl.innerHTML = message;
-    
-    const container = document.querySelector('.container');
-    container.insertBefore(alertEl, container.children[1]);
+    alertEl.textContent = message;
+
+    const toastRegion = document.getElementById('toastRegion');
+    if (!toastRegion) return;
+    toastRegion.appendChild(alertEl);
     
     setTimeout(() => {
         alertEl.remove();
@@ -58,6 +59,8 @@ function showAlert(message, type = 'success') {
 
 // 设置按钮加载状态
 function setButtonLoading(button, loading) {
+    if (!button) return;
+
     if (loading) {
         button.disabled = true;
         button.classList.add('loading');
@@ -67,9 +70,13 @@ function setButtonLoading(button, loading) {
     }
 }
 
+function getActionElement(event) {
+    return event?.currentTarget || event?.target?.closest('button, a') || null;
+}
+
 // 立即检查
 function checkNow(event) {
-    const btn = event.target.closest('.btn');
+    const btn = getActionElement(event);
     setButtonLoading(btn, true);
     
     fetch('/api/check', { method: 'POST' })
@@ -95,7 +102,7 @@ function checkNow(event) {
 
 // 刷新数据
 function refreshData(event) {
-    const btn = event.target.closest('.btn');
+    const btn = getActionElement(event);
     setButtonLoading(btn, true);
     
     fetch('/api/stats')
@@ -144,8 +151,8 @@ function refreshData(event) {
 }
 
 // 刷新预测数据
-function refreshPrediction() {
-    const btn = event.target.closest('.btn');
+function refreshPrediction(event) {
+    const btn = getActionElement(event);
     setButtonLoading(btn, true);
     
     fetch('/api/prediction')
@@ -193,15 +200,15 @@ function updatePredictionDisplay(prediction) {
         daysElement.textContent = prediction.days_remaining.toFixed(1) + '天';
         
         // 根据剩余天数设置颜色
-        daysElement.className = '';
+        daysElement.className = 'forecast-days';
         if (prediction.days_remaining <= 3) {
-            daysElement.className = 'text-danger';
+            daysElement.classList.add('text-danger');
         } else if (prediction.days_remaining <= 7) {
-            daysElement.className = 'text-warning';
+            daysElement.classList.add('text-warning');
         }
     } else {
         daysElement.textContent = '--';
-        daysElement.className = '';
+        daysElement.className = 'forecast-days';
     }
     
     // 更新预计到达日期
@@ -238,7 +245,7 @@ function clearAllRecords(event) {
         return;
     }
     
-    const btn = event.target.closest('.btn');
+    const btn = getActionElement(event);
     setButtonLoading(btn, true);
     
     fetch('/api/records', { method: 'DELETE' })
@@ -296,6 +303,16 @@ function closeSettings() {
     document.getElementById('settingsModal').style.display = 'none';
 }
 
+function openInsightModal(title, message) {
+    document.getElementById('insightTitle').textContent = title;
+    document.getElementById('insightBody').textContent = message;
+    document.getElementById('insightModal').style.display = 'block';
+}
+
+function closeInsightModal() {
+    document.getElementById('insightModal').style.display = 'none';
+}
+
 // 加载设置
 function loadSettings() {
     fetch('/api/config')
@@ -342,145 +359,138 @@ function drawCharts() {
 
 // 绘制余额趋势图
 function drawChart(canvasId, chartData, title, chartType) {
-    if (!chartData || chartData.length === 0) {
-        return;
-    }
-    
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
-    
+
     const ctx = canvas.getContext('2d');
-    
-    // 设置Canvas尺寸
-    canvas.width = canvas.offsetWidth * 2;
-    canvas.height = canvas.offsetHeight * 2;
-    ctx.scale(2, 2);
-    
     const width = canvas.offsetWidth;
     const height = canvas.offsetHeight;
-    const margin = 60;
-    const chartWidth = width - 2 * margin;
-    const chartHeight = height - 2 * margin;
-    
-    // 清空画布
+    if (!width || !height) return;
+
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    
-    // 数据处理
-    const balances = chartData.map(item => item[1]);
-    const maxBalance = Math.max(...balances);
-    const minBalance = Math.min(...balances);
+
+    const points = (chartData || [])
+        .map(item => ({ label: item[0], value: Number(item[1]) }))
+        .filter(item => Number.isFinite(item.value));
+
+    if (points.length === 0) {
+        ctx.fillStyle = '#8f98aa';
+        ctx.font = '13px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('积累数据后，这里会显示余额趋势', width / 2, height / 2);
+        return;
+    }
+
+    const compact = width < 620;
+    const margin = {
+        top: 26,
+        right: compact ? 16 : 24,
+        bottom: 40,
+        left: compact ? 48 : 58
+    };
+    const chartWidth = width - margin.left - margin.right;
+    const chartHeight = height - margin.top - margin.bottom;
+    const balances = points.map(item => item.value);
+    const dataMax = Math.max(...balances);
+    const dataMin = Math.min(...balances);
+    const rawRange = dataMax - dataMin || Math.max(dataMax * 0.08, 1);
+    const maxBalance = dataMax + rawRange * 0.12;
+    const minBalance = Math.max(0, dataMin - rawRange * 0.12);
     const balanceRange = maxBalance - minBalance || 1;
-    
-    // 绘制背景
-    ctx.fillStyle = '#f8f9fa';
-    ctx.fillRect(margin, margin, chartWidth, chartHeight);
-    
-    // 绘制网格线
-    ctx.strokeStyle = '#e1e5e9';
+    const stepX = chartWidth / Math.max(points.length - 1, 1);
+    const pointX = index => margin.left + stepX * index;
+    const pointY = value => margin.top + (maxBalance - value) / balanceRange * chartHeight;
+
+    // 克制的横向网格，减少折线图的视觉噪音。
     ctx.lineWidth = 1;
-    
-    // 水平网格线
-    for (let i = 0; i <= 5; i++) {
-        const y = margin + (chartHeight / 5) * i;
+    ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif';
+    for (let i = 0; i <= 4; i++) {
+        const y = margin.top + (chartHeight / 4) * i;
+        ctx.strokeStyle = '#e7eaf1';
         ctx.beginPath();
-        ctx.moveTo(margin, y);
-        ctx.lineTo(margin + chartWidth, y);
+        ctx.moveTo(margin.left, y);
+        ctx.lineTo(margin.left + chartWidth, y);
         ctx.stroke();
-        
-        // Y轴标签
-        const value = maxBalance - (balanceRange / 5) * i;
-        ctx.fillStyle = '#666';
-        ctx.font = '12px Arial';
+
+        const value = maxBalance - (balanceRange / 4) * i;
+        ctx.fillStyle = '#8f98aa';
         ctx.textAlign = 'right';
-        ctx.fillText((value !== null && value !== undefined) ? value.toFixed(2) : "--", margin - 10, y + 4);
+        ctx.fillText(value.toFixed(1), margin.left - 10, y + 4);
     }
-    
-    // 垂直网格线
-    const stepX = chartWidth / Math.max(chartData.length - 1, 1);
-    for (let i = 0; i < chartData.length; i++) {
-        const x = margin + stepX * i;
+
+    const buildLinePath = () => {
         ctx.beginPath();
-        ctx.moveTo(x, margin);
-        ctx.lineTo(x, margin + chartHeight);
-        ctx.stroke();
-    }
-    
-    // 绘制折线
-    if (chartData.length > 1) {
-        ctx.strokeStyle = '#667eea';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        
-        for (let i = 0; i < chartData.length; i++) {
-            const x = margin + stepX * i;
-            const balance = chartData[i][1];
-            const y = margin + (maxBalance - balance) / balanceRange * chartHeight;
-            
-            if (i === 0) {
-                ctx.moveTo(x, y);
-            } else {
-                ctx.lineTo(x, y);
-            }
-        }
-        ctx.stroke();
-        
-        // 绘制数据点
-        ctx.fillStyle = '#667eea';
-        for (let i = 0; i < chartData.length; i++) {
-            const x = margin + stepX * i;
-            const balance = chartData[i][1];
-            const y = margin + (maxBalance - balance) / balanceRange * chartHeight;
-            
-            ctx.beginPath();
-            ctx.arc(x, y, 4, 0, 2 * Math.PI);
-            ctx.fill();
-            
-            // 数据点标签
-            ctx.fillStyle = '#333';
-            ctx.font = '11px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText((balance !== null && balance !== undefined) ? balance.toFixed(2) : "--", x, y - 10);
-            ctx.fillStyle = '#667eea';
-        }
-    }
-    
-    // 绘制X轴标签
-    ctx.fillStyle = '#666';
-    ctx.font = '11px Arial';
+        points.forEach((point, index) => {
+            const x = pointX(index);
+            const y = pointY(point.value);
+            if (index === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+    };
+
+    // 面积渐变让趋势更易扫读，但保持透明，不遮盖刻度。
+    buildLinePath();
+    ctx.lineTo(pointX(points.length - 1), margin.top + chartHeight);
+    ctx.lineTo(pointX(0), margin.top + chartHeight);
+    ctx.closePath();
+    const fill = ctx.createLinearGradient(0, margin.top, 0, margin.top + chartHeight);
+    fill.addColorStop(0, 'rgba(91, 75, 216, 0.20)');
+    fill.addColorStop(1, 'rgba(91, 75, 216, 0.015)');
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    buildLinePath();
+    ctx.strokeStyle = '#5b4bd8';
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // 仅突出最后一个点，避免 30 天数据全部打标签。
+    const lastIndex = points.length - 1;
+    const lastPoint = points[lastIndex];
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#5b4bd8';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(pointX(lastIndex), pointY(lastPoint.value), 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#4338ca';
+    ctx.font = '600 11px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`¥${lastPoint.value.toFixed(2)}`, pointX(lastIndex), Math.max(16, pointY(lastPoint.value) - 12));
+
+    const labelStep = Math.max(1, Math.ceil(points.length / (compact ? 5 : 8)));
+    ctx.fillStyle = '#8f98aa';
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.textAlign = 'center';
-    for (let i = 0; i < chartData.length; i++) {
-        const x = margin + stepX * i;
+    points.forEach((point, index) => {
+        if (index % labelStep !== 0 && index !== lastIndex) return;
         let label;
         if (chartType === 'hourly') {
-            // 按小时显示：显示小时格式
-            const date = new Date(chartData[i][0]);
+            const date = new Date(point.label);
             label = date.getHours() + ':00';
         } else if (chartType === 'monthly') {
-            // 按月显示：显示年-月格式
-            label = chartData[i][0];
+            label = point.label;
         } else {
-            // 按天显示：显示月/日格式
-            const date = new Date(chartData[i][0]);
+            const date = new Date(point.label);
             label = (date.getMonth() + 1) + '/' + date.getDate();
         }
-        ctx.fillText(label, x, margin + chartHeight + 20);
-    }
-    
-    // 绘制坐标轴
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(margin, margin);
-    ctx.lineTo(margin, margin + chartHeight);
-    ctx.lineTo(margin + chartWidth, margin + chartHeight);
-    ctx.stroke();
-    
-    // 添加标题
-    ctx.fillStyle = '#333';
-    ctx.font = 'bold 16px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText(title, width / 2, 30);
+        ctx.fillText(label, pointX(index), margin.top + chartHeight + 24);
+    });
 }
+
+let resizeTimer;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(drawCharts, 120);
+});
 
 // 自动刷新数据（每10分钟）
 setInterval(() => {
@@ -520,9 +530,19 @@ setInterval(() => {
 
 // 点击模态框外部关闭
 window.addEventListener('click', function(event) {
-    const modal = document.getElementById('settingsModal');
-    if (event.target === modal) {
+    const settingsModal = document.getElementById('settingsModal');
+    const insightModal = document.getElementById('insightModal');
+    if (event.target === settingsModal) {
         closeSettings();
+    } else if (event.target === insightModal) {
+        closeInsightModal();
+    }
+});
+
+window.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        closeSettings();
+        closeInsightModal();
     }
 });
 
@@ -531,7 +551,7 @@ window.addEventListener('click', function(event) {
 // 切换日志显示
 function toggleLogs(event) {
     const logsCard = document.getElementById('logsCard');
-    const btn = event.target.closest('.btn');
+    const btn = getActionElement(event);
     const btnText = btn.querySelector('.btn-text');
     
     if (logsCard.style.display === 'none') {
@@ -549,7 +569,7 @@ function toggleLogs(event) {
 
 // 刷新日志
 async function refreshLogs(event) {
-    const btn = event?.target?.closest('.btn');
+    const btn = getActionElement(event);
     if (btn) setButtonLoading(btn, true);
     
     try {
@@ -614,7 +634,7 @@ async function clearLogs(event) {
         return;
     }
     
-    const btn = event?.target?.closest('.btn');
+    const btn = getActionElement(event);
     if (btn) setButtonLoading(btn, true);
     
     try {
@@ -701,21 +721,20 @@ function showPredictionAnalytics() {
         .then(data => {
             if (data.success) {
                 const analytics = data.analytics;
-                let message = `📊 预测分析报告\n\n`;
-                message += `🕒 分析期间：最近 ${analytics.analysis_period} 天\n\n`;
-                message += `📈 用电模式分析：\n`;
+                let message = `分析期间：最近 ${analytics.analysis_period} 天\n\n`;
+                message += `用电模式\n`;
                 message += `• 工作日平均：${analytics.usage_pattern.weekday_avg} 元/天 (${analytics.usage_pattern.weekday_samples} 个样本)\n`;
                 message += `• 周末平均：${analytics.usage_pattern.weekend_avg} 元/天 (${analytics.usage_pattern.weekend_samples} 个样本)\n`;
                 message += `• 整体平均：${analytics.usage_pattern.overall_avg} 元/天\n`;
                 message += `• 模式差异：${analytics.usage_pattern.pattern_difference} 元/天\n\n`;
                 
                 if (analytics.usage_pattern.pattern_difference > 1) {
-                    message += `💡 您的工作日和周末用电模式存在明显差异，高级预测模式将提供更准确的预测结果。`;
+                    message += `工作日和周末的用电模式存在明显差异，高级预测模式会分别计算两类数据。`;
                 } else {
-                    message += `💡 您的用电模式相对稳定，预测结果具有较高的可信度。`;
+                    message += `目前工作日和周末的用电差异较小，整体用电模式相对稳定。`;
                 }
                 
-                alert(message);
+                openInsightModal('用电模式分析', message);
             } else {
                 showAlert('获取预测分析失败：' + data.message, 'error');
             }
@@ -732,16 +751,16 @@ function showPredictionAccuracy() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                let message = `🎯 预测准确性统计\n\n`;
+                let message = '';
                 
                 if (data.overall_stats.total_predictions > 0) {
-                    message += `📊 总体统计：\n`;
+                    message += `总体统计\n`;
                     message += `• 已评估预测：${data.overall_stats.total_predictions} 个\n`;
                     message += `• 平均准确率：${data.overall_stats.average_accuracy}%\n`;
                     message += `• 高准确率预测：${data.overall_stats.high_accuracy_rate}%\n\n`;
                     
                     if (data.method_stats.length > 0) {
-                        message += `📈 各方法统计：\n`;
+                        message += `各方法统计\n`;
                         data.method_stats.forEach(method => {
                             const methodName = method.method === 'advanced' ? '高级模式' : '基础模式';
                             message += `• ${methodName}：${method.total_predictions}个预测，平均准确率${method.average_accuracy}%\n`;
@@ -755,7 +774,7 @@ function showPredictionAccuracy() {
                     message += `暂无已评估的预测记录。\n预测准确性需要一段时间的数据积累才能评估。`;
                 }
                 
-                alert(message);
+                openInsightModal('预测准确性', message);
             } else {
                 showAlert('获取预测准确性失败：' + data.message, 'error');
             }

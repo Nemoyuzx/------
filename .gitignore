@@ -6,3 +6,6 @@ __pycache__/
 venv/
 *.log
 *.db
+output/playwright/xiaohongshu-overview-demo.png
+output/playwright/xiaohongshu-trend-demo.png
+.DS_Store
